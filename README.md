@@ -51,7 +51,7 @@ Reproduce it with `node bench/run.mjs --data mind2web_train_steps.jsonl.gz --llm
 
 ## Screenshots
 
-| Scanning a page | After saying the goal "buy milk" |
+| Scanning a page: groups light up in turn | After typing a goal with the switch, "Add Milk to cart" is 3 presses away |
 | --- | --- |
 | ![Groups of choices highlighted](docs/ui1_scan.png) | ![Add Milk to cart highlighted](docs/ui3_goal.png) |
 | **Scanning keyboard with AI suggestions** | **Settings and your stats** |

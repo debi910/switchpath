@@ -287,6 +287,7 @@
         if (r && r.error && r.error !== 'off') setStatus(`Model unavailable (${r.error.slice(0, 60)}); using history and page cues.`);
         return;
       }
+      S.note = '';
       S.llm = {};
       for (const [i, p] of Object.entries(r.probs)) if (items[+i]) S.llm[items[+i].text] = p;
       S.llmModel = r.model;
