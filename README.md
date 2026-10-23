@@ -56,6 +56,8 @@ Reproduce it with `node bench/run.mjs --data mind2web_train_steps.jsonl.gz --llm
 | ![Groups of choices highlighted](docs/ui1_scan.png) | ![Add Milk to cart highlighted](docs/ui3_goal.png) |
 | **Scanning keyboard with AI suggestions** | **Settings and your stats** |
 | ![Keyboard](docs/ui2_keyboard.png) | ![Settings](docs/ui4_settings.png) |
+| **Home page (replaces New Tab)** | |
+| ![Home](docs/ui5_home.png) | |
 
 ## Install
 
@@ -64,19 +66,26 @@ Reproduce it with `node bench/run.mjs --data mind2web_train_steps.jsonl.gz --llm
 3. The settings page opens on its own:
    - Press your switch to set the switch key. Space is the default, and most USB switch interfaces send Space or Enter.
    - Optional: paste a free Gemini key from https://aistudio.google.com/apikey. No card is needed.
-4. On any page, click the toolbar icon or press **Alt+Shift+S** to start scanning.
+4. Scanning starts on every page by itself. Holding the switch for 2 seconds also starts it, so nobody needs a mouse to bring it back. The toolbar icon and **Alt+Shift+S** turn it on and off.
 
 ## Using it
 
 - **Press** the switch when the highlight is on what you want. A group opens, and an element gets clicked.
 - If you don't press, the highlight goes round a group twice and then backs out.
-- **Hold** the switch for 2 seconds to pause or resume.
-- The bar at the bottom offers **Scroll down / up**, **Back**, **Tell AI my goal** and **Stop**.
+- **Hold** the switch for 2 seconds to pause, resume, or start scanning again. There is no "Stop" a switch user can't undo.
+- The bar at the bottom offers **Scroll down / up**, **Back**, **Go to site or search**, **Home**, **Tell AI my goal** and **Pause**.
+- **Scroll** moves whatever is scrollable under the middle of the screen. In web apps like mail or chat that is often an inner panel, not the page.
+- **The home page replaces Chrome's New Tab page.** Chrome doesn't let extensions run on its own New Tab page, so a switch user who opened a tab would be stuck. Home has a search box and tiles for the sites you use most, with favicons from Chrome's local cache.
 - Text boxes open a **scanning keyboard**. Letters are ordered by what you are likely typing next, offline from a 12,000-word model. Word completions and AI suggestions for the field sit on top.
 - Dropdowns open as a scan list.
 - The settings page shows your average steps per click next to what row-column and one-by-one scanning would have taken.
 - A press that lands within 150 ms after the highlight moves counts for the previous item, to allow for reaction time.
 - A second switch can step the highlight manually instead of the timer.
+- **Adaptive speed:** after three late presses or missed groups in the last ten picks, the scan slows by 12%. After ten quick, clean picks it speeds up by 7%, within 0.45 to 4 seconds.
+- **Double-press protection:** a second press within 300 ms of a choice is ignored, so a tremor or a bouncing switch doesn't choose twice.
+- **Read aloud:** optional auditory scanning speaks each highlight. Groups are named by their most likely members, for example "8 choices: Add Orange juice to cart, Accessibility…".
+- **Seeing it:** the page dims around the current choice, which gets a thick ring in amber, cyan, magenta or lime, and a thin bar shows when the highlight will move. With reduced motion on, the timer bar and flash are off.
+- **Privacy:** the AI never sees a page with a password box, or any site on your exclusion list. The status bar shows when the AI is paused for a page.
 
 ## How it works
 
@@ -88,10 +97,12 @@ extension/
   core/words.js    12k-word frequency list for the keyboard
   content.js       collects visible clickables, draws the overlay (shadow DOM), runs the scan
   background.js    model calls (keeps the key out of web pages), caching, per-tab goal and trail
-  options.html/js  settings and your stats
+  options.html/js  settings, switch tester and your stats
+  home.html/js     scannable New Tab page
+  ui.css           shared look for the settings and home pages
 bench/run.mjs      Mind2Web benchmark
 test/              unit tests (node --test test/*.test.mjs)
-demo/shop.html     a small page for trying it offline
+demo/              shop.html (a small shop) and panel.html (an inner scrolling panel) for trying it offline
 ```
 
 **The scan tree.** With timed scanning, choosing the t-th entry of a list costs t steps, and opening a group costs its position plus whatever happens inside. For items in a fixed order with probabilities p, let G(i, j) be the least expected cost of scanning items i..j as one list. Then

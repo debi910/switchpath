@@ -1,0 +1,5 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Inbox</title>
+<style>html,body{height:100%;margin:0;overflow:hidden;font:16px system-ui} .app{display:flex;height:100%} nav{width:200px;background:#eef;padding:10px} .list{flex:1;overflow:auto;padding:10px} .list a{display:block;padding:14px;border-bottom:1px solid #ddd}</style></head>
+<body><div class="app"><nav><a href="#">Inbox</a><br><a href="#">Sent</a></nav><div class="list" id="list"></div></div>
+<script>for(let i=1;i<=60;i++){const a=document.createElement('a');a.href='#m'+i;a.textContent='Message '+i;list.append(a)}</script></body></html>

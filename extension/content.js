@@ -1,10 +1,13 @@
 // SwitchPath content script: one-switch scanning over the live page.
 //
-// Every visible clickable element (plus scroll, back, goal and stop) gets a
-// probability from page heuristics, this user's history on the site and a
-// free-tier model's prediction. The choices are arranged into the scan tree
+// Every visible clickable element (plus scroll, back, home, goal and pause)
+// gets a probability from page heuristics, this user's history on the site and
+// a free-tier model's prediction. The choices are arranged into the scan tree
 // that minimizes expected steps (core/tree.js), and the highlight walks that
 // tree: press the switch on a group to enter it, on an element to use it.
+//
+// Also runs on the extension's own home page (home.html), which replaces the
+// New Tab page so a switch user never lands on a page they can't scan.
 
 (() => {
   if (window.__switchpath) return;
@@ -16,17 +19,26 @@
     nextKey: '', // set for two-switch step scanning (no timer)
     scanMs: 1100,
     graceMs: 150, // presses this soon after the highlight moves count for the previous choice
+    debounceMs: 300, // presses this soon after a choice are ignored (tremor, double hits)
+    holdMs: 2000, // holding the switch this long pauses, resumes or starts scanning
+    adaptive: true, // slow down after late presses and misses, speed up when picks are easy
+    speak: false, // read each highlight aloud (auditory scanning)
+    color: 'amber',
     order: 'coherent',
     laps: 2,
-    autoStart: false,
+    autoStart: true,
     useModel: true,
+    noAiSites: '',
   };
+  const COLORS = { amber: '#ffb000', cyan: '#00d5ff', magenta: '#ff4fd8', lime: '#9dff3a' };
   const ACTIONS = [
-    { id: 'down', label: 'Scroll down', prior: 0.08 },
-    { id: 'up', label: 'Scroll up', prior: 0.02 },
-    { id: 'back', label: 'Back', prior: 0.03 },
-    { id: 'goal', label: 'Tell AI my goal', prior: 0.01 },
-    { id: 'stop', label: 'Stop scanning', prior: 0.005 },
+    { id: 'down', label: 'Scroll down', icon: '↓', prior: 0.08 },
+    { id: 'up', label: 'Scroll up', icon: '↑', prior: 0.02 },
+    { id: 'back', label: 'Back', icon: '←', prior: 0.03 },
+    { id: 'go', label: 'Go to site or search', icon: '⌕', prior: 0.012 },
+    { id: 'home', label: 'Home', icon: '⌂', prior: 0.006 },
+    { id: 'goal', label: 'Tell AI my goal', icon: '✦', prior: 0.01 },
+    { id: 'pause', label: 'Pause', icon: 'Ⅱ', prior: 0.004 },
   ];
   const SELECTOR = [
     'a[href]', 'button', 'input:not([type=hidden])', 'select', 'textarea', 'summary',
@@ -36,8 +48,10 @@
   ].join(',');
   // Clickables whose insides are one choice, not many.
   const ATOMIC = 'a[href],button,summary,[role=button],[role=link],[role=option],[role=menuitem],[role=tab]';
+  const HOME_URL = chrome.runtime.getURL('home.html');
+  const onHome = location.href.startsWith(HOME_URL);
 
-  let cfg = { ...DEFAULTS };
+  const cfg = { ...DEFAULTS };
   const S = {
     on: false,
     paused: false,
@@ -50,30 +64,66 @@
     llm: null, // label -> probability from the model
     llmModel: '',
     llmAt: 0,
+    aiState: 'off', // off | waiting | ok | error | private
     rebuildPending: false,
     downAt: 0,
-    kb: null, // {target, text, kind: 'field'|'goal', suggestions: []}
-    last: '',
+    advancedAt: 0,
+    chosenAt: 0,
+    kb: null, // {target, text, kind: 'field'|'goal'|'url', aiSugg: []}
+    last: null,
+    recent: [], // last picks for speed adaptation: {late, miss, frac}
+    misses: 0,
   };
 
   // ---------- overlay (shadow DOM so page styles can't touch it) ----------
   const host = document.createElement('switchpath-overlay');
   const shadow = host.attachShadow({ mode: 'closed' });
   shadow.innerHTML = `<style>
-    :host { all: initial; }
+    :host { all: initial; --hl: #ffb000; --ease-out: cubic-bezier(0.23, 1, 0.32, 1); }
+    * { box-sizing: border-box; }
     .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483646; }
-    .box { position: fixed; box-sizing: border-box; border-radius: 6px; transition: all 80ms; }
-    .box.cur { border: 4px solid #ffb000; background: rgba(255, 176, 0, 0.22); box-shadow: 0 0 0 3px #000c; }
-    .box.sib { border: 2px dashed rgba(30, 90, 255, 0.55); }
-    .badge { position: fixed; font: 700 14px/1.2 system-ui, sans-serif; background: #000; color: #ffb000; padding: 2px 7px; border-radius: 4px; }
-    .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; background: #111e; color: #fff;
-      font: 15px/1.3 system-ui, sans-serif; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
+    .mask { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    .ring { position: fixed; border-radius: 8px; box-shadow: 0 0 0 2px #000, 0 0 0 5px var(--hl), 0 0 0 7px #000; }
+    .ring.flash { animation: flash 180ms var(--ease-out); }
+    @keyframes flash { from { background: color-mix(in srgb, var(--hl) 45%, transparent); } to { background: transparent; } }
+    .sib { position: fixed; border-radius: 6px; outline: 1.5px solid color-mix(in srgb, var(--hl) 55%, transparent); outline-offset: 2px; }
+    .badge { position: fixed; display: flex; flex-direction: column; gap: 3px; max-width: 360px;
+      font: 600 14px/1.25 system-ui, -apple-system, 'Segoe UI', sans-serif; background: #0d0f12; color: #fff;
+      padding: 5px 9px 6px; border-radius: 7px; box-shadow: 0 4px 14px #0006; }
+    .badge .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .badge .t b { color: var(--hl); font-weight: 700; }
+    .timer { height: 3px; border-radius: 2px; background: #ffffff22; overflow: hidden; }
+    .timer i { display: block; height: 100%; background: var(--hl); transform-origin: left; transform: scaleX(0); }
+    .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; pointer-events: auto;
+      background: rgba(13, 15, 18, 0.94); backdrop-filter: blur(10px); color: #f2f3f5;
+      font: 15px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif; padding: 10px 12px 8px;
+      display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #ffffff1a; }
     .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    .btn { border: 2px solid #555; border-radius: 6px; padding: 6px 10px; background: #222; color: #fff; font: inherit; min-width: 28px; text-align: center; }
-    .status { opacity: 0.85; font-size: 13px; flex: 1; min-width: 200px; }
-    .text { background: #fff; color: #000; padding: 6px 8px; border-radius: 4px; min-height: 22px; font-size: 17px; flex: 1; }
-    .sugg { border-color: #3a7; }
-    .ai { border-color: #a5f; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid #ffffff24; border-radius: 9px;
+      padding: 7px 12px; background: #1c1f25; color: #f2f3f5; font: inherit; font-weight: 500; min-width: 40px;
+      justify-content: center; white-space: nowrap; }
+    .btn .i { opacity: 0.75; font-size: 14px; }
+    .btn.cur { background: var(--hl); color: #000; border-color: #000; box-shadow: 0 0 0 3px #000, 0 0 0 5px var(--hl); }
+    .btn.cur .i { opacity: 1; }
+    .btn.sibling { border-color: color-mix(in srgb, var(--hl) 60%, transparent); }
+    .btn.picked { transform: scale(0.97); }
+    .key { min-width: 44px; font-variant-numeric: tabular-nums; }
+    .ai { border-color: #9b6bff88; } .ai .i { color: #b89bff; opacity: 1; }
+    .sugg { border-color: #39c58a88; }
+    .text { background: #fff; color: #000; padding: 8px 10px; border-radius: 8px; min-height: 38px; font-size: 18px; flex: 1;
+      overflow-wrap: anywhere; }
+    .label { font-size: 13px; color: #aab0bb; margin-right: 4px; }
+    .status { display: flex; gap: 10px; align-items: center; font-size: 13px; color: #aab0bb; min-height: 22px; }
+    .status .hint { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dots { display: inline-flex; gap: 4px; } .dots i { width: 7px; height: 7px; border-radius: 50%; background: #ffffff30; }
+    .dots i.on { background: var(--hl); }
+    .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; background: #ffffff12;
+      color: #dfe2e7; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+    .chip .d { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; flex-shrink: 0; }
+    .chip .d.ok { background: #39c58a; } .chip .d.waiting { background: #e6b422; } .chip .d.error { background: #ef5350; }
+    .chip.win { background: color-mix(in srgb, var(--hl) 18%, transparent); color: #fff; }
+    .paused { font-size: 16px; color: #fff; }
+    @media (prefers-reduced-motion: reduce) { .timer { display: none; } .ring.flash { animation: none; } }
     [hidden] { display: none !important; }
   </style>
   <div class="layer"></div>
@@ -83,18 +133,28 @@
     <div class="row kbkeys" hidden></div>
     <div class="row selopts" hidden></div>
     <div class="row actions"></div>
-    <div class="row"><span class="status"></span></div>
+    <div class="status"><span class="dots"></span><span class="hint"></span><span class="chips"></span></div>
   </div>`;
   const $ = (s) => shadow.querySelector(s);
   const layer = $('.layer');
   const bar = $('.bar');
-  const statusEl = $('.status');
   for (const a of ACTIONS) {
-    const b = document.createElement('div');
-    b.className = 'btn';
+    const b = button(a.label, a.icon);
     b.dataset.action = a.id;
-    b.textContent = a.label;
     $('.actions').append(b);
+  }
+
+  function button(text, icon, cls = '') {
+    const b = document.createElement('div');
+    b.className = 'btn ' + cls;
+    if (icon) {
+      const i = document.createElement('span');
+      i.className = 'i';
+      i.textContent = icon;
+      b.append(i);
+    }
+    b.append(document.createTextNode(text));
+    return b;
   }
 
   // ---------- collecting choices ----------
@@ -184,25 +244,50 @@
       els.push(d);
       if (els.length >= 300) break;
     }
-    // Duplicate labels pointing at the same place (image + title links) stay
-    // separate choices; the tree puts them where they cost least.
     return els;
+  }
+
+  // Web apps (mail, chat, feeds) often scroll an inner panel, not the page.
+  // Find the scrollable element under the middle of the screen.
+  function scroller() {
+    const se = document.scrollingElement || document.documentElement;
+    if (se.scrollHeight > innerHeight + 4) return se;
+    let best = null;
+    for (const [fx, fy] of [[0.5, 0.5], [0.3, 0.5], [0.7, 0.5], [0.5, 0.3]]) {
+      let el = document.elementFromPoint(innerWidth * fx, innerHeight * fy);
+      while (el && el !== document.body && el !== document.documentElement) {
+        const oy = getComputedStyle(el).overflowY;
+        if (/(auto|scroll|overlay)/.test(oy) && el.scrollHeight > el.clientHeight + 20) {
+          const area = el.clientWidth * el.clientHeight;
+          if (!best || area > best.area) best = { el, area };
+          break;
+        }
+        el = el.parentElement;
+      }
+    }
+    return best ? best.el : se;
   }
 
   function actionItems() {
     const out = [];
-    const se = document.scrollingElement || document.documentElement;
+    const sc = scroller();
+    const viewH = sc === document.scrollingElement || sc === document.documentElement ? innerHeight : sc.clientHeight;
     for (const a of ACTIONS) {
-      const off = (a.id === 'down' && se.scrollTop + innerHeight >= se.scrollHeight - 4) || (a.id === 'up' && se.scrollTop <= 0) || (a.id === 'back' && history.length <= 1);
-      shadow.querySelector(`[data-action=${a.id}]`).hidden = off;
+      const off =
+        (a.id === 'down' && sc.scrollTop + viewH >= sc.scrollHeight - 4) ||
+        (a.id === 'up' && sc.scrollTop <= 0) ||
+        (a.id === 'back' && history.length <= 1) ||
+        (a.id === 'home' && onHome);
+      const node = shadow.querySelector(`[data-action=${a.id}]`);
+      node.hidden = off;
       if (off) continue;
-      out.push({ kind: 'action', id: a.id, text: a.label, prior: a.prior, node: shadow.querySelector(`[data-action=${a.id}]`) });
+      out.push({ kind: 'action', id: a.id, text: a.label, prior: a.prior, node });
     }
     return out;
   }
 
   // ---------- history ----------
-  const histKey = 'hist:' + location.host;
+  const histKey = 'hist:' + (onHome ? 'home' : location.host);
   let hist = { site: {}, pages: {} };
   const pageKey = () => location.pathname.replace(/\d+/g, '#');
 
@@ -257,7 +342,7 @@
   }
 
   function boxOf(it) {
-    if (it.kind === 'action' || it.kind === 'key') {
+    if (it.node) {
       const r = it.node.getBoundingClientRect();
       return [r.left, r.top + 10000, r.width, r.height]; // after page content
     }
@@ -265,9 +350,19 @@
   }
 
   // ---------- the model ----------
+  // Never send a page with a password field, or a site the user excluded.
+  function aiAllowed() {
+    if (!cfg.useModel) return false;
+    const host = location.hostname;
+    const excluded = cfg.noAiSites.split(/[\s,]+/).filter(Boolean).some((s) => host === s || host.endsWith('.' + s));
+    const secret = !!document.querySelector('input[type=password]');
+    S.aiState = excluded || secret ? 'private' : S.aiState === 'private' ? 'off' : S.aiState;
+    return !excluded && !secret;
+  }
+
   let askTimer = null;
   function askModel(items) {
-    if (!cfg.useModel) return;
+    if (!aiAllowed()) return;
     const labels = items.map((it) => it.text).join('\u0001');
     if (labels === S.askedFor) return;
     clearTimeout(askTimer);
@@ -276,6 +371,8 @@
     askTimer = setTimeout(async () => {
       S.askedFor = labels;
       S.llmAt = Date.now();
+      S.aiState = 'waiting';
+      renderStatus();
       const elements = items.map((it, i) => ({ id: i, kind: it.kind, label: (it.text || '(no label)').slice(0, 80), region: it.region }));
       let r;
       try {
@@ -283,11 +380,14 @@
       } catch {
         return;
       }
-      if (!r || r.error || !S.on) {
-        if (r && r.error && r.error !== 'off') setStatus(`Model unavailable (${r.error.slice(0, 60)}); using history and page cues.`);
+      if (!S.on) return;
+      if (!r || r.error) {
+        S.aiState = r && r.error === 'off' ? 'off' : 'error';
+        S.aiError = r && r.error;
+        renderStatus();
         return;
       }
-      S.note = '';
+      S.aiState = 'ok';
       S.llm = {};
       for (const [i, p] of Object.entries(r.probs)) if (items[+i]) S.llm[items[+i].text] = p;
       S.llmModel = r.model;
@@ -296,6 +396,7 @@
         if (S.stack.length === 1 && S.stack[0].i <= 0) restart();
         else S.rebuildPending = true;
       }
+      renderStatus();
     }, wait);
   }
 
@@ -324,14 +425,16 @@
   function advance() {
     const top = S.stack[S.stack.length - 1];
     S.prev = { top, i: top.i, at: performance.now() };
+    S.advancedAt = performance.now();
     top.i++;
     if (top.i >= top.list.length) {
       top.i = 0;
       top.laps++;
       if (S.stack.length > 1 && top.laps >= cfg.laps) {
-        // Nothing chosen in this group: go back up.
+        // Nothing chosen in this group: go back up. Counts as a miss.
         S.stack.pop();
         S.stack[S.stack.length - 1].i = 0;
+        S.misses++;
       } else if (S.stack.length === 1 && S.rebuildPending) {
         restart();
         return;
@@ -345,7 +448,9 @@
   function pressTarget() {
     const top = S.stack[S.stack.length - 1];
     const p = S.prev;
-    S.pressI = p && p.top === top && p.i >= 0 && performance.now() - p.at < cfg.graceMs ? p.i : top.i;
+    S.late = !!(p && p.top === top && p.i >= 0 && performance.now() - p.at < cfg.graceMs);
+    S.pressI = S.late ? p.i : top ? top.i : null;
+    S.pressFrac = Math.min(1, (performance.now() - S.advancedAt) / cfg.scanMs);
   }
 
   function choose() {
@@ -355,6 +460,8 @@
     S.prev = null;
     const node = current();
     if (!node) return;
+    S.chosenAt = performance.now();
+    flash(node);
     if (node.children) {
       S.stack.push({ list: node.children, i: 0, laps: 0 });
       draw();
@@ -366,12 +473,36 @@
     if (S.mode === 'page') {
       const rc = SP.rowColumnSteps(S.rows, node.item);
       const lin = SP.linearSteps(S.reading, node.item);
-      S.last = `Last pick: ${steps} steps (row-column scanning: ${rc}, one-by-one: ${lin}).`;
+      S.last = { steps, rc, lin };
       logStats(steps, rc, lin);
       rememberPick(it.sig);
     }
+    adaptSpeed();
     activate(it);
   }
+
+  // Adaptive timing: presses that land late (inside the grace window) or
+  // groups the user lets run out mean the scan is too fast for them today;
+  // a run of quick, clean picks means it can go a little faster.
+  function adaptSpeed() {
+    S.recent.push({ late: S.late, miss: S.misses > 0, frac: S.pressFrac || 1 });
+    S.misses = 0;
+    S.recent = S.recent.slice(-10);
+    if (!cfg.adaptive || cfg.nextKey) return;
+    const trouble = S.recent.filter((r) => r.late || r.miss).length;
+    let next = cfg.scanMs;
+    if (trouble >= 3) next = Math.min(4000, Math.round(cfg.scanMs * 1.12));
+    else if (S.recent.length === 10 && trouble === 0 && median(S.recent.map((r) => r.frac)) < 0.45) next = Math.max(450, Math.round(cfg.scanMs * 0.93));
+    if (next !== cfg.scanMs) {
+      const slower = next > cfg.scanMs;
+      cfg.scanMs = next;
+      S.recent = [];
+      chrome.storage.local.set({ scanMs: next }).catch(() => {});
+      setStatus(`${slower ? 'Slowed' : 'Sped'} the scan to ${(next / 1000).toFixed(2)} s per step`);
+    }
+  }
+
+  const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
 
   async function logStats(steps, rc, lin) {
     try {
@@ -409,13 +540,28 @@
   }
 
   function doAction(id) {
-    const se = document.scrollingElement || document.documentElement;
-    if (id === 'down') se.scrollBy({ top: innerHeight * 0.8, behavior: 'instant' });
-    if (id === 'up') se.scrollBy({ top: -innerHeight * 0.8, behavior: 'instant' });
+    const sc = scroller();
+    const page = sc === document.scrollingElement || sc === document.documentElement;
+    const step = (page ? innerHeight : sc.clientHeight) * 0.8;
+    if (id === 'down') sc.scrollBy({ top: step, behavior: 'instant' });
+    if (id === 'up') sc.scrollBy({ top: -step, behavior: 'instant' });
     if (id === 'back') history.back();
-    if (id === 'stop') return stop();
+    if (id === 'home') location.href = HOME_URL;
+    if (id === 'pause') return setPaused(true);
     if (id === 'goal') return openKeyboard({ kind: 'goal', field: 'Your goal', text: S.goal });
-    settleThenRestart(id === 'back' ? 900 : 250);
+    if (id === 'go') return openKeyboard({ kind: 'url', field: 'Website or search', text: '' });
+    settleThenRestart(id === 'back' || id === 'home' ? 900 : 250);
+  }
+
+  function setPaused(p) {
+    S.paused = p;
+    clearTimeout(S.timer);
+    if (p) {
+      S.stack = [{ list: [], i: -1, laps: 0 }];
+      draw();
+      speak(`Paused. Hold the switch for ${Math.round(cfg.holdMs / 1000)} seconds to resume.`);
+    } else restart();
+    renderStatus();
   }
 
   // ---------- dropdowns ----------
@@ -426,9 +572,7 @@
     row.hidden = false;
     const opts = [...sel.options].filter((o) => !o.disabled);
     const items = opts.map((o) => {
-      const b = document.createElement('div');
-      b.className = 'btn';
-      b.textContent = o.text;
+      const b = button(o.text, o.selected ? '✓' : '');
       row.append(b);
       return { kind: 'option', text: o.text, node: b, option: o, select: sel };
     });
@@ -453,15 +597,16 @@
 
   // ---------- keyboard ----------
   const LETTERS = 'etaoinshrdlucmfwypvbgkqjxz'.split('');
-  const EXTRA = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '@', '-', ','];
+  const EXTRA = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '@', '-', ',', '/', '?'];
   const wordIndex = SP.WORDS.map((w, i) => [w, Math.exp(SP.WORD_LOGP[i])]);
+  const KB_PROMPT = { goal: 'What do you want to do here?', url: 'Website or search:' };
 
   function openKeyboard(kb) {
     S.mode = 'keyboard';
     S.kb = { text: kb.kind === 'field' ? currentText(kb.target) : kb.text || '', aiSugg: [], ...kb };
     if (kb.kind === 'goal') S.kb.text = S.goal;
     $('.kbtext').hidden = $('.kbsugg').hidden = $('.kbkeys').hidden = false;
-    $('.kbtext .label').textContent = kb.kind === 'goal' ? 'What do you want to do here?' : `Typing into: ${kb.field}`;
+    $('.kbtext .label').textContent = KB_PROMPT[kb.kind] || `Typing into: ${kb.field}`;
     restart();
     askSuggestions();
   }
@@ -512,16 +657,16 @@
     const kb = S.kb;
     const m = keyboardModel(kb.text);
     const keys = [];
-    const add = (label, kind, value, weight) => keys.push({ kind: 'key', text: label, key: kind, value, w: weight });
+    const add = (label, kind, value, weight, icon = '') => keys.push({ kind: 'key', text: label, key: kind, value, w: weight, icon });
     const tot = Object.values(m.next).reduce((a, b) => a + b, 0) + m.wordEnd || 1;
-    for (const s of kb.aiSugg) add(s, 'ai', s, 0.12);
+    for (const s of kb.aiSugg) add(s, 'ai', s, 0.12, '✦');
     for (const [w, p] of m.completions) add(w, 'word', w, (0.5 * p) / tot);
-    add('space', 'char', ' ', m.prefix ? 0.08 + (0.5 * m.wordEnd) / tot : 0.01);
+    add('space', 'char', ' ', m.prefix ? 0.08 + (0.5 * m.wordEnd) / tot : 0.01, '␣');
     for (const c of LETTERS) add(c, 'char', c, 0.004 + (0.6 * (m.next[c] || 0)) / tot);
-    for (const c of EXTRA) add(c, 'char', c, 0.002);
-    add('⌫ delete', 'del', '', 0.03);
-    add(kb.kind === 'goal' ? '✓ save goal' : '⏎ enter / go', 'enter', '', kb.text.length > 2 ? 0.06 : 0.005);
-    add('✕ close keyboard', 'close', '', 0.01);
+    for (const c of EXTRA) add(c, 'char', c, kb.kind === 'url' && /[./]/.test(c) ? 0.02 : 0.002);
+    add('delete', 'del', '', 0.03, '⌫');
+    add(kb.kind === 'goal' ? 'save goal' : kb.kind === 'url' ? 'go' : 'enter', 'enter', '', kb.text.length > 2 ? 0.06 : 0.005, kb.kind === 'goal' ? '✓' : '⏎');
+    add('close', 'close', '', 0.01, '✕');
     // Lay keys out: suggestions on top, keys below, in a fixed order so the
     // user's eyes learn where things are; the tree decides the grouping.
     const sugRow = $('.kbsugg');
@@ -529,12 +674,12 @@
     sugRow.replaceChildren();
     keyRow.replaceChildren();
     for (const k of keys) {
-      const b = document.createElement('div');
-      b.className = 'btn' + (k.key === 'ai' ? ' ai' : k.key === 'word' ? ' sugg' : '');
-      b.textContent = k.key === 'ai' ? `✨ ${k.text}` : k.text;
-      (k.key === 'ai' || k.key === 'word' ? sugRow : keyRow).append(b);
+      const sug = k.key === 'ai' || k.key === 'word';
+      const b = button(k.text, k.icon, k.key === 'ai' ? 'ai' : k.key === 'word' ? 'sugg' : 'key');
+      (sug ? sugRow : keyRow).append(b);
       k.node = b;
     }
+    sugRow.hidden = !sugRow.children.length;
     $('.kbtext .text').textContent = kb.text + '▏';
     S.items = keys;
     S.tree = SP.buildTree(keys.map((k) => k.w), { order: 'fast' });
@@ -550,6 +695,12 @@
         chrome.runtime.sendMessage({ type: 'goal', goal: S.goal }).catch(() => {});
         S.llm = null;
         S.askedFor = '';
+        return closeKeyboard();
+      }
+      if (kb.kind === 'url') {
+        const t = kb.text.trim();
+        if (!t) return closeKeyboard();
+        location.href = /^\S+\.[a-z]{2,}(\/\S*)?$/i.test(t) ? (/^https?:/i.test(t) ? t : 'https://' + t) : 'https://www.google.com/search?q=' + encodeURIComponent(t);
         return closeKeyboard();
       }
       const el = kb.target;
@@ -568,15 +719,16 @@
 
   let suggTimer = null;
   function askSuggestions() {
-    if (!cfg.useModel) return;
+    const kb = S.kb;
+    // Never suggest into password fields; respect the AI privacy rules.
+    if (!kb || (kb.target && kb.target.type === 'password') || !aiAllowed()) return;
     clearTimeout(suggTimer);
     suggTimer = setTimeout(async () => {
-      const kb = S.kb;
-      if (!kb) return;
       const typed = kb.text;
+      const field = kb.kind === 'goal' ? 'a short description of what the user wants to do on this page' : kb.kind === 'url' ? 'a website address or a web search' : kb.field;
       let r;
       try {
-        r = await chrome.runtime.sendMessage({ type: 'suggest', url: location.href, title: document.title, field: kb.kind === 'goal' ? 'a short description of what the user wants to do on this page' : kb.field, typed });
+        r = await chrome.runtime.sendMessage({ type: 'suggest', url: location.href, title: document.title, field, typed });
       } catch {
         return;
       }
@@ -595,74 +747,220 @@
     return { left: x, top: y, width: w, height: h };
   }
 
+  const SVG = 'http://www.w3.org/2000/svg';
+
   function draw() {
+    syncBar();
     layer.replaceChildren();
+    for (const b of shadow.querySelectorAll('.btn.cur,.btn.sibling')) b.classList.remove('cur', 'sibling');
     const top = S.stack[S.stack.length - 1];
-    if (!S.on || !top) return;
+    renderDots();
+    if (!S.on || !top || !top.list.length) {
+      host.dataset.current = '';
+      renderStatus();
+      return;
+    }
     const cur = current();
-    top.list.forEach((node, t) => {
+    const holes = [];
+    let curRects = [];
+    top.list.forEach((node) => {
       const leaves = node.children ? SP.leaves(node) : [node.item];
-      const cls = node === cur ? 'cur' : 'sib';
-      let first = null;
+      const isCur = node === cur;
       for (const li of leaves) {
         const it = S.items[li];
         if (!it) continue;
+        // At the top level everything is a sibling; outlining it all is noise.
+        const showSib = S.stack.length > 1;
+        if (it.node) {
+          // Bar buttons sit above the overlay: style the button itself.
+          if (isCur || showSib) it.node.classList.add(isCur ? 'cur' : 'sibling');
+          if (isCur) curRects.push(it.node.getBoundingClientRect());
+          continue;
+        }
         const r = rectOf(it);
-        const b = document.createElement('div');
-        b.className = 'box ' + cls;
-        Object.assign(b.style, { left: r.left - 3 + 'px', top: r.top - 3 + 'px', width: r.width + 6 + 'px', height: r.height + 6 + 'px' });
-        layer.append(b);
-        if (!first || r.top < first.top) first = r;
-      }
-      if (node === cur && first) {
-        const badge = document.createElement('div');
-        badge.className = 'badge';
-        badge.textContent = node.children ? `${leaves.length} choices` : S.items[node.item].text.slice(0, 40) || '(no label)';
-        Object.assign(badge.style, { left: Math.max(0, first.left) + 'px', top: Math.max(0, first.top - 24) + 'px' });
-        layer.append(badge);
-        // For automated tests and screen readers outside the closed shadow.
-        host.dataset.current = node.children ? `group:${leaves.length}` : S.items[node.item].text;
-        host.dataset.leaves = JSON.stringify(leaves.map((li) => S.items[li] && S.items[li].text));
+        if (isCur) {
+          holes.push(r);
+          curRects.push(r);
+          const ring = document.createElement('div');
+          ring.className = 'ring';
+          place(ring, r, 4);
+          layer.append(ring);
+        } else if (showSib) {
+          const sib = document.createElement('div');
+          sib.className = 'sib';
+          place(sib, r, 1);
+          layer.append(sib);
+        }
       }
     });
+    // Spotlight: dim the page except the current choice, so it stands out
+    // even for low vision, on any page colour.
+    if (holes.length) {
+      const svg = document.createElementNS(SVG, 'svg');
+      svg.setAttribute('class', 'mask');
+      const path = document.createElementNS(SVG, 'path');
+      let d = `M0 0H${innerWidth}V${innerHeight}H0Z`;
+      for (const r of holes) d += roundRect(r.left - 4, r.top - 4, r.width + 8, r.height + 8, 8);
+      path.setAttribute('d', d);
+      path.setAttribute('fill-rule', 'evenodd');
+      path.setAttribute('fill', 'rgba(8,10,14,0.42)');
+      svg.append(path);
+      layer.prepend(svg);
+    }
+    if (cur) {
+      const leaves = cur.children ? SP.leaves(cur) : [cur.item];
+      const label = cur.children ? groupLabel(leaves) : S.items[cur.item].text || '(no label)';
+      if (curRects.length) badge(label, cur.children ? leaves.length : 0, curRects);
+      if (cur !== S.spokenNode) speak(cur.children ? `${leaves.length} choices. ${label}` : label);
+      S.spokenNode = cur;
+      // For automated tests and screen readers outside the closed shadow.
+      host.dataset.current = cur.children ? `group:${leaves.length}` : S.items[cur.item].text;
+      host.dataset.leaves = JSON.stringify(leaves.map((li) => S.items[li] && S.items[li].text));
+    }
     host.dataset.depth = S.stack.length;
     host.dataset.mode = S.mode;
     renderStatus();
   }
 
+  // Only the choices being scanned are shown in the bar.
+  function syncBar() {
+    $('.actions').hidden = S.mode !== 'page';
+  }
+
+  // A group is named by its most likely members, so the user knows what's inside.
+  function groupLabel(leaves) {
+    const named = leaves.map((li) => S.items[li]).filter((it) => it && it.text).sort((a, b) => (b.p || b.w || 0) - (a.p || a.w || 0));
+    return named.slice(0, 2).map((it) => it.text.slice(0, 28)).join(', ') + (named.length > 2 ? '…' : '');
+  }
+
+  function place(el, r, pad) {
+    Object.assign(el.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + 2 * pad + 'px', height: r.height + 2 * pad + 'px' });
+  }
+
+  function roundRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    return `M${x + r} ${y}H${x + w - r}Q${x + w} ${y} ${x + w} ${y + r}V${y + h - r}Q${x + w} ${y + h} ${x + w - r} ${y + h}H${x + r}Q${x} ${y + h} ${x} ${y + h - r}V${y + r}Q${x} ${y} ${x + r} ${y}Z`;
+  }
+
+  function badge(label, count, rects) {
+    const b = document.createElement('div');
+    b.className = 'badge';
+    const t = document.createElement('div');
+    t.className = 't';
+    if (count) {
+      const n = document.createElement('b');
+      n.textContent = `${count} choices · `;
+      t.append(n);
+    }
+    t.append(document.createTextNode(label));
+    b.append(t);
+    if (!cfg.nextKey && !S.paused) {
+      const timer = document.createElement('div');
+      timer.className = 'timer';
+      const fill = document.createElement('i');
+      timer.append(fill);
+      b.append(timer);
+      // Constant motion, so linear; it shows how long until the highlight moves.
+      fill.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: S.stack.length && S.stack.at(-1).i === 0 ? cfg.scanMs * 1.5 : cfg.scanMs, easing: 'linear', fill: 'forwards' });
+    }
+    const first = rects.reduce((a, r) => (r.top < a.top ? r : a));
+    const barTop = bar.getBoundingClientRect().top;
+    // Above the choice if there's room, else below it; never under the bar.
+    let y = first.top - 46;
+    if (y < 4) y = first.top + first.height + 10;
+    y = Math.min(y, barTop - 50);
+    Object.assign(b.style, { left: Math.max(6, Math.min(first.left, innerWidth - 370)) + 'px', top: Math.max(4, y) + 'px' });
+    layer.append(b);
+  }
+
+  function flash(node) {
+    const leaves = node.children ? SP.leaves(node) : [node.item];
+    for (const li of leaves) {
+      const it = S.items[li];
+      if (it && it.node) {
+        it.node.classList.add('picked');
+        setTimeout(() => it.node.classList.remove('picked'), 140);
+      }
+    }
+    for (const ring of layer.querySelectorAll('.ring')) ring.classList.add('flash');
+  }
+
+  function speak(text) {
+    if (!cfg.speak || !text || !('speechSynthesis' in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text.slice(0, 120));
+    u.rate = 1.15;
+    speechSynthesis.speak(u);
+  }
+
+  function renderDots() {
+    const dots = $('.dots');
+    dots.replaceChildren();
+    if (S.mode !== 'page' || S.paused) return;
+    for (let d = 0; d < Math.max(3, S.stack.length); d++) {
+      const i = document.createElement('i');
+      if (d < S.stack.length) i.className = 'on';
+      dots.append(i);
+    }
+  }
+
   function setStatus(msg) {
     S.note = msg;
+    clearTimeout(S.noteTimer);
+    S.noteTimer = setTimeout(() => {
+      S.note = '';
+      renderStatus();
+    }, 6000);
     renderStatus();
   }
 
   function renderStatus() {
-    const parts = [];
-    if (S.paused) parts.push('Paused. Hold the switch for 2 seconds to resume.');
-    else if (S.mode === 'page') parts.push(`Depth ${S.stack.length} · press ${keyName(cfg.switchKey)} to choose · hold 2 s to pause`);
-    if (S.goal) parts.push(`Goal: ${S.goal}`);
-    if (S.llmModel && S.mode === 'page') parts.push(`AI: ${S.llmModel}`);
-    if (S.last) parts.push(S.last);
-    if (S.note) parts.push(S.note);
-    statusEl.textContent = parts.join('  ·  ');
+    const hint = $('.hint');
+    const chips = $('.chips');
+    hint.className = 'hint' + (S.paused ? ' paused' : '');
+    const hold = `${Math.round(cfg.holdMs / 1000)} s`;
+    if (S.paused) hint.textContent = `Paused. Hold the switch for ${hold} to resume.`;
+    else if (S.note) hint.textContent = S.note;
+    else if (S.last && S.mode === 'page') hint.textContent = `Last pick: ${S.last.steps} steps. Row-column scanning would take ${S.last.rc}, one-by-one ${S.last.lin}.`;
+    else hint.textContent = `Press ${keyName(cfg.switchKey)} to choose · hold ${hold} to pause`;
+    chips.replaceChildren();
+    if (S.goal) {
+      const g = document.createElement('span');
+      g.className = 'chip win';
+      g.textContent = `Goal: ${S.goal}`;
+      chips.append(g);
+    }
+    const ai = document.createElement('span');
+    ai.className = 'chip';
+    const dot = document.createElement('span');
+    dot.className = 'd ' + S.aiState;
+    ai.append(dot);
+    const words = { ok: `AI: ${S.llmModel.replace(/^gemini-/, 'Gemini ')}`, waiting: 'AI thinking', error: 'AI unavailable, using your history', off: 'AI off', private: 'AI paused on this page' };
+    ai.append(document.createTextNode(words[S.aiState] || 'AI off'));
+    if (S.aiState === 'error' && S.aiError) ai.title = S.aiError;
+    chips.append(ai);
   }
 
-  const keyName = (code) => code.replace(/^Key/, '');
+  const keyName = (code) => code.replace(/^Key/, '').replace(/^Digit/, '');
 
   // ---------- switch input ----------
   function onKeyDown(e) {
+    if (e.code === cfg.switchKey && !e.repeat) S.downAt = performance.now();
     if (!S.on) return;
     if (e.code === cfg.switchKey || (cfg.nextKey && e.code === cfg.nextKey)) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (!e.repeat && e.code === cfg.switchKey) {
-        S.downAt = performance.now();
-        pressTarget();
-      }
+      if (!e.repeat && e.code === cfg.switchKey) pressTarget();
     }
   }
 
   function onKeyUp(e) {
-    if (!S.on) return;
+    const held = performance.now() - S.downAt;
+    if (!S.on) {
+      // A long hold starts scanning, so the switch alone can bring it back.
+      if (e.code === cfg.switchKey && S.downAt && held > cfg.holdMs) start();
+      return;
+    }
     if (cfg.nextKey && e.code === cfg.nextKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -672,22 +970,16 @@
     if (e.code !== cfg.switchKey) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    const held = performance.now() - S.downAt;
-    if (held > 2000) {
-      S.paused = !S.paused;
-      if (!S.paused) restart();
-      else clearTimeout(S.timer);
-      renderStatus();
-      return;
-    }
+    if (held > cfg.holdMs) return setPaused(!S.paused);
     if (S.paused) return;
+    if (performance.now() - S.chosenAt < cfg.debounceMs) return; // a bounce or tremor, not a new choice
     choose();
   }
 
   // ---------- page changes ----------
   let changeTimer = null;
   function onChange() {
-    if (!S.on || S.mode !== 'page') return;
+    if (!S.on || S.mode !== 'page' || S.paused) return;
     clearTimeout(changeTimer);
     changeTimer = setTimeout(() => {
       const top = S.stack[S.stack.length - 1];
@@ -702,11 +994,16 @@
   const observer = new MutationObserver(onChange);
 
   // ---------- on / off ----------
-  async function start() {
-    if (S.on) return;
+  async function loadSettings() {
     try {
       Object.assign(cfg, await chrome.storage.local.get(Object.keys(DEFAULTS)));
     } catch {}
+    host.style.setProperty('--hl', COLORS[cfg.color] || COLORS.amber);
+  }
+
+  async function start() {
+    if (S.on) return;
+    await loadSettings();
     await loadHistory();
     try {
       const r = await chrome.runtime.sendMessage({ type: 'page', title: document.title });
@@ -717,8 +1014,9 @@
     S.on = true;
     S.paused = false;
     S.mode = 'page';
+    S.aiState = 'off';
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'open'] });
-    addEventListener('scroll', onChange, { passive: true });
+    addEventListener('scroll', onChange, { passive: true, capture: true });
     addEventListener('resize', onChange);
     restart();
   }
@@ -727,8 +1025,9 @@
     S.on = false;
     clearTimeout(S.timer);
     observer.disconnect();
-    removeEventListener('scroll', onChange);
+    removeEventListener('scroll', onChange, { capture: true });
     removeEventListener('resize', onChange);
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
     host.remove();
   }
 
@@ -737,5 +1036,9 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'toggle') S.on ? stop() : start();
   });
-  chrome.storage.local.get(['autoStart']).then((s) => s.autoStart && start(), () => {});
+  chrome.storage.onChanged.addListener((changes) => {
+    for (const k in changes) if (k in DEFAULTS) cfg[k] = changes[k].newValue ?? DEFAULTS[k];
+    host.style.setProperty('--hl', COLORS[cfg.color] || COLORS.amber);
+  });
+  loadSettings().then(() => cfg.autoStart && start());
 })();
