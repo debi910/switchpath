@@ -93,7 +93,9 @@ export function rankPrompt({ url, title, trail = [], goal = '', elements }) {
 // -> {index: probability} keyed by the caller's element index.
 export async function rankElements({ apiKey, models, url, title, trail, goal, elements }) {
   const shown = elements.slice(0, 160);
-  const { model, json } = await generateJSON({ apiKey, models, system: RANK_SYSTEM, prompt: rankPrompt({ url, title, trail, goal, elements: shown }) });
+  // A late ranking still helps (it applies at the next pass), so wait longer
+  // than for typing suggestions: free models can be slow at busy times.
+  const { model, json } = await generateJSON({ apiKey, models, system: RANK_SYSTEM, prompt: rankPrompt({ url, title, trail, goal, elements: shown }), timeoutMs: 20000 });
   const out = {};
   const ranked = Array.isArray(json) ? json : json?.ranked || [];
   for (const r of ranked) {
@@ -116,7 +118,11 @@ export async function suggestText({ apiKey, models, url, title, goal, field, typ
   const { model, json } = await generateJSON({ apiKey, models, system: TEXT_SYSTEM, prompt, timeoutMs: 8000 });
   const list = (Array.isArray(json) ? json : json?.suggestions || []).filter((s) => typeof s === 'string');
   const lc = typed.toLowerCase();
-  return { model, suggestions: list.filter((s) => s.toLowerCase().startsWith(lc) && s.length > typed.length).slice(0, 5) };
+  // Models sometimes return only the word being typed ("milk" for "buy m"):
+  // put the earlier words back in front.
+  const head = typed.slice(0, typed.length - (typed.match(/\S*$/) || [''])[0].length);
+  const fixed = list.map((s) => (s.toLowerCase().startsWith(lc) || !(head + s).toLowerCase().startsWith(lc) ? s : head + s));
+  return { model, suggestions: [...new Set(fixed)].filter((s) => s.toLowerCase().startsWith(lc) && s.length > typed.length).slice(0, 5) };
 }
 
 export async function listModels(apiKey) {

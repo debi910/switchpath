@@ -660,8 +660,12 @@
     const add = (label, kind, value, weight, icon = '') => keys.push({ kind: 'key', text: label, key: kind, value, w: weight, icon });
     const tot = Object.values(m.next).reduce((a, b) => a + b, 0) + m.wordEnd || 1;
     // Older suggestions stay only while they still match what was typed.
+    // Older suggestions stay while they still match what was typed, so a
+    // fifth guess from one letter ago can be the first one now.
     const lc = kb.text.toLowerCase();
-    for (const s of kb.aiSugg) if (s.toLowerCase().startsWith(lc) && s.length > kb.text.length) add(s, 'ai', s, 0.12, '✦');
+    const shown = kb.aiSugg.filter((s) => s.toLowerCase().startsWith(lc) && s.length > kb.text.length).slice(0, 3);
+    for (const s of shown) add(s, 'ai', s, 0.12, '✦');
+    host.dataset.sugg = JSON.stringify(shown); // for tests
     for (const [w, p] of m.completions) add(w, 'word', w, (0.5 * p) / tot);
     add('space', 'char', ' ', m.prefix ? 0.08 + (0.5 * m.wordEnd) / tot : 0.01, '␣');
     for (const c of LETTERS) add(c, 'char', c, 0.004 + (0.6 * (m.next[c] || 0)) / tot);
@@ -686,6 +690,7 @@
     S.items = keys;
     S.tree = SP.buildTree(keys.map((k) => k.w), { order: 'fast' });
     S.stack = [{ list: S.tree.children, i: -1, laps: 0 }];
+    S.rebuildPending = false;
   }
 
   function pressKey(k) {
@@ -697,6 +702,7 @@
         chrome.runtime.sendMessage({ type: 'goal', goal: S.goal }).catch(() => {});
         S.llm = null;
         S.askedFor = '';
+        S.llmAt = 0; // a new goal deserves a fresh ranking right away
         return closeKeyboard();
       }
       if (kb.kind === 'url') {
@@ -735,9 +741,11 @@
         return;
       }
       if (!r || r.error || S.kb !== kb || kb.text !== typed) return;
-      kb.aiSugg = r.suggestions.slice(0, 3);
-      // Only rebuild if the user hasn't started moving through the keys.
+      kb.aiSugg = [...new Set([...r.suggestions, ...kb.aiSugg])];
+      // Rebuild now if the user hasn't started moving through the keys,
+      // otherwise when the scan next comes round to the top.
       if (S.stack.length === 1 && S.stack[0].i <= 0) restart();
+      else S.rebuildPending = true;
     }, 150);
   }
 
@@ -917,6 +925,7 @@
   }
 
   function renderStatus() {
+    host.dataset.ai = S.aiState || ''; // for tests
     const hint = $('.hint');
     const chips = $('.chips');
     hint.className = 'hint' + (S.paused ? ' paused' : '');
