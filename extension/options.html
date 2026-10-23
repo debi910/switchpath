@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SwitchPath settings</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #111; background: #fafafa; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  section { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  input[type=text], input[type=password], select { font: inherit; padding: 6px 8px; width: 100%; box-sizing: border-box; }
+  input[type=number] { font: inherit; width: 110px; padding: 6px 8px; }
+  button { font: inherit; padding: 6px 14px; }
+  .hint { color: #555; font-size: 14px; }
+  .ok { color: #070; } .err { color: #b00; }
+  .stat { font-size: 20px; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>SwitchPath</h1>
+<p class="hint">Browse with one switch. Start and stop with the toolbar button or Alt+Shift+S. Hold the switch for 2 seconds to pause.</p>
+
+<section>
+  <h2>Your switch</h2>
+  <label for="switchKey">Switch key</label>
+  <button id="captureSwitch">Press to set…</button> <span id="switchKeyShow"></span>
+  <p class="hint">Most USB switch interfaces send Space or Enter. Pick whatever yours sends.</p>
+  <label for="scanMs">Time per highlight (ms)</label>
+  <input id="scanMs" type="number" min="300" max="5000" step="100">
+  <label for="laps">Times round a group before backing out</label>
+  <input id="laps" type="number" min="1" max="5">
+  <label for="nextKey">Second switch for "next" (optional; turns off the timer)</label>
+  <button id="captureNext">Press to set…</button> <span id="nextKeyShow"></span> <button id="clearNext">Clear</button>
+  <label for="order">Grouping</label>
+  <select id="order">
+    <option value="coherent">Keep groups in page order (easier to follow)</option>
+    <option value="fast">Fewest steps (groups can span the page)</option>
+  </select>
+  <label><input id="autoStart" type="checkbox"> Start scanning on every page</label>
+</section>
+
+<section>
+  <h2>Free AI predictions</h2>
+  <p class="hint">A free Google AI Studio key lets a model read the page (and your goal, if you give one) and guess your next click, so it lands nearer the front. No card needed: <a href="https://aistudio.google.com/apikey" target="_blank">get a key</a>. The key stays in this browser and is only sent to Google.</p>
+  <label><input id="useModel" type="checkbox"> Use AI predictions</label>
+  <label for="apiKey">Gemini API key</label>
+  <input id="apiKey" type="password" autocomplete="off" placeholder="AIza…">
+  <button id="test">Test key</button> <span id="testOut"></span>
+  <label for="models">Models to try, in order (one per line)</label>
+  <textarea id="models" rows="5" style="width:100%;font:14px monospace"></textarea>
+  <p class="hint">Free tiers cap requests per model per day, so SwitchPath moves to the next model when one runs out. Today: <span id="usage">no calls yet</span>.</p>
+</section>
+
+<section>
+  <h2>How it's going</h2>
+  <p class="stat" id="stats">No picks yet.</p>
+  <p class="hint">Steps are highlight positions you waited through. Your click history is stored only in this browser.</p>
+  <button id="clearHistory">Forget my click history</button> <span id="clearOut"></span>
+</section>
+
+<script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+node_modules/
+bench/llm-cache.json
+bench/run.log
+*.jsonl.gz
+.DS_Store

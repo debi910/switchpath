@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "SwitchPath",
+  "version": "0.1.0",
+  "description": "Browse the web with one switch. Scanning that learns what you click and asks a free AI model what you'll want next.",
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": ["<all_urls>", "https://generativelanguage.googleapis.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["core/tree.js", "core/priors.js", "core/words.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Start or stop SwitchPath (Alt+Shift+S)", "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" } },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "commands": {
+    "toggle-scanning": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "Start or stop scanning" }
+  },
+  "options_page": "options.html"
+}

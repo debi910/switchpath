@@ -1,0 +1,157 @@
+{
+  "steps": 7350,
+  "skipped": 12,
+  "main": [
+    {
+      "method": "linear",
+      "steps": 43.26,
+      "median": 24,
+      "secondsAt1sPerStep": 43.3,
+      "vsRowColumn": "+204%",
+      "within5": "5%"
+    },
+    {
+      "method": "rowcol",
+      "steps": 14.22,
+      "median": 10,
+      "secondsAt1sPerStep": 14.2,
+      "vsRowColumn": "0%",
+      "within5": "20%"
+    },
+    {
+      "method": "tree/uniform",
+      "steps": 7.7,
+      "median": 6,
+      "secondsAt1sPerStep": 7.7,
+      "vsRowColumn": "-46%",
+      "within5": "27%"
+    },
+    {
+      "method": "tree/heuristic",
+      "steps": 7.5,
+      "median": 7,
+      "secondsAt1sPerStep": 7.5,
+      "vsRowColumn": "-47%",
+      "within5": "31%"
+    },
+    {
+      "method": "tree/fitted",
+      "steps": 7.27,
+      "median": 6,
+      "secondsAt1sPerStep": 7.3,
+      "vsRowColumn": "-49%",
+      "within5": "39%"
+    },
+    {
+      "method": "tree/fitted+history",
+      "steps": 7.08,
+      "median": 7,
+      "secondsAt1sPerStep": 7.1,
+      "vsRowColumn": "-50%",
+      "within5": "34%"
+    },
+    {
+      "method": "tree/fitted+history (fast)",
+      "steps": 6.73,
+      "median": 6,
+      "secondsAt1sPerStep": 6.7,
+      "vsRowColumn": "-53%",
+      "within5": "37%"
+    }
+  ],
+  "domains": [
+    {
+      "domain": "Travel",
+      "steps": 3865,
+      "linear": 33.5,
+      "rowcol": 12.6,
+      "switchpath": 6.7
+    },
+    {
+      "domain": "Shopping",
+      "steps": 2204,
+      "linear": 63.3,
+      "rowcol": 17.3,
+      "switchpath": 7.7
+    },
+    {
+      "domain": "Entertainment",
+      "steps": 1281,
+      "linear": 38.3,
+      "rowcol": 13.9,
+      "switchpath": 7.2
+    }
+  ],
+  "llm": [
+    {
+      "method": "tree/fitted+history",
+      "steps": 7.09,
+      "median": 6,
+      "secondsAt1sPerStep": 7.1,
+      "vsRowColumn": "-51%",
+      "within5": "38%"
+    },
+    {
+      "method": "tree/+model (page only)",
+      "steps": 7.27,
+      "median": 7,
+      "secondsAt1sPerStep": 7.3,
+      "vsRowColumn": "-50%",
+      "within5": "36%"
+    },
+    {
+      "method": "tree/+model+goal",
+      "steps": 6.49,
+      "median": 6,
+      "secondsAt1sPerStep": 6.5,
+      "vsRowColumn": "-56%",
+      "within5": "48%"
+    },
+    {
+      "method": "rowcol",
+      "steps": 14.6,
+      "median": 10,
+      "secondsAt1sPerStep": 14.6,
+      "vsRowColumn": "0%",
+      "within5": "21%"
+    },
+    {
+      "method": "linear",
+      "steps": 44.85,
+      "median": 24,
+      "secondsAt1sPerStep": 44.9,
+      "vsRowColumn": "+207%",
+      "within5": "6%"
+    }
+  ],
+  "weights": [
+    {
+      "bias": 7.921971034147087e-16,
+      "logArea": 0.8344106122271668,
+      "textInput": 1.0911879756325937,
+      "search": 0.4651874970621846,
+      "button": 0.17346653735165943,
+      "select": 0.9007829911825067,
+      "noLabel": -0.060546616364291796,
+      "longLabel": -0.045353138395527695,
+      "inNav": -0.28241772932987413,
+      "inFooter": -0.2030730139714084,
+      "belowFold": 0,
+      "top": -0.846508216821605
+    },
+    {
+      "bias": 4.808533375502493e-16,
+      "logArea": 1.1743354007422997,
+      "textInput": 1.1028878701816986,
+      "search": 0.7061292445603353,
+      "button": 0.33857576414254886,
+      "select": 1.3268620237694524,
+      "noLabel": -0.27536376692778597,
+      "longLabel": -0.2636171886749135,
+      "inNav": -0.32246317143752057,
+      "inFooter": -0.1983621504980169,
+      "belowFold": 0,
+      "top": -0.9239983927793747
+    }
+  ]
+}

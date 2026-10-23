@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Corner Shop: groceries delivered</title>
+<style>body{font:16px system-ui;margin:0} header,nav,footer{background:#eef;padding:10px} nav a{margin-right:14px} main{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px}
+.card{border:1px solid #ccc;border-radius:8px;padding:10px} .card button{margin-top:6px} footer a{margin-right:10px;font-size:13px}</style></head>
+<body>
+<header><a href="#">Corner Shop</a> <form onsubmit="event.preventDefault();document.getElementById('res').textContent='Results for: '+this.q.value"><input name="q" type="search" placeholder="Search groceries"> <button>Search</button></form> <a href="#">Sign in</a> <a href="#">Cart (0)</a></header>
+<nav><a href="#">Fruit</a><a href="#">Vegetables</a><a href="#">Dairy</a><a href="#">Bakery</a><a href="#">Meat</a><a href="#">Frozen</a><a href="#">Drinks</a><a href="#">Snacks</a><a href="#">Household</a><a href="#">Offers</a>
+<select name="store"><option>Downtown store</option><option>Riverside store</option><option>Airport store</option></select></nav>
+<p id="res"></p>
+<main id="grid"></main>
+<footer><a href="#">About</a><a href="#">Careers</a><a href="#">Help</a><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Accessibility</a><a href="#">Contact</a></footer>
+<script>
+const items=['Bananas','Apples','Milk','Bread','Eggs','Butter','Cheddar','Yogurt','Chicken','Rice','Pasta','Tomatoes','Onions','Coffee','Tea','Orange juice'];
+for(const it of items){const d=document.createElement('div');d.className='card';d.innerHTML=`<a href="#">${it}</a><br>$${(Math.random()*5+1).toFixed(2)}<br><button onclick="document.querySelector('header a:last-child').textContent='Cart ('+(++window.n||(window.n=1))+')'">Add ${it} to cart</button>`;grid.append(d);}
+</script>
+</body></html>

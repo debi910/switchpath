@@ -1,0 +1,5 @@
+Pass 1: screens and training data
+7350 steps usable, 12 skipped (target not a visible element)
+Fitted weights (fold 0): {"bias":0,"logArea":0.83,"textInput":1.09,"search":0.47,"button":0.17,"select":0.9,"noLabel":-0.06,"longLabel":-0.05,"inNav":-0.28,"inFooter":-0.2,"belowFold":0,"top":-0.85}
+Model subset: 299 steps fully answered
+Pass 2: scoring
