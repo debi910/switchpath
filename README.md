@@ -49,6 +49,14 @@ Notes:
 
 Reproduce it with `node bench/run.mjs --data mind2web_train_steps.jsonl.gz --llm 300`. You need a free `GEMINI_API_KEY` for `--llm`. To build the data file, take the Hugging Face parquet copy of the Mind2Web train split. For each action, write one JSON line with `task_id, website, domain, task, step, op, value, targets` and `elements: [{id, tag, text, attrs, bbox}]`, using the positive and negative candidates. Get each element's text from `cleaned_html` by `backend_node_id`.
 
+## Screenshots
+
+| Scanning a page | After saying the goal "buy milk" |
+| --- | --- |
+| ![Groups of choices highlighted](docs/ui1_scan.png) | ![Add Milk to cart highlighted](docs/ui3_goal.png) |
+| **Scanning keyboard with AI suggestions** | **Settings and your stats** |
+| ![Keyboard](docs/ui2_keyboard.png) | ![Settings](docs/ui4_settings.png) |
+
 ## Install
 
 1. Download this repository (Code → Download ZIP) and unzip it.
