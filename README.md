@@ -118,7 +118,7 @@ where the first child is either item i alone (k = i) or the group i..k. This fin
 - **The benchmark simulates a perfect user** who always presses at the right moment, the standard assumption in scanning research. Real users miss sometimes. Fewer steps also means fewer chances to miss, but we have not tested with switch users yet.
 - **Mind2Web gives element boxes but not every page's real clickability.** We count standard interactive elements plus the annotated target. About 30% of targets are generic `div`/`span` elements made clickable by scripts. The extension finds those through `onclick`/`tabindex`/ARIA roles, but not always.
 - **Each Mind2Web task is a different goal,** so "history" here only captures site habits (search box, filters, Scroll). One person using the same sites daily should gain more.
-- **Free tier limits.** Gemini free models allow roughly 15–30 requests per minute and a daily cap per model. SwitchPath calls the model once per new screen, caches answers, and switches models when one runs out.
+- **Free tier limits.** Each Gemini Flash-Lite model allows 500 requests a day per Google Cloud project, and roughly 15–30 a minute. SwitchPath calls the model once per new screen, caches answers, and moves to the next free model when one runs out. Three Flash-Lite models give about 1,500 screens a day; after that it runs on history and page cues alone.
 - The model sees element labels and the page URL and title. It never sees form contents or passwords.
 - iframes, canvas apps and closed shadow DOMs are not scanned.
 
