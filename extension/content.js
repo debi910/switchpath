@@ -659,7 +659,9 @@
     const keys = [];
     const add = (label, kind, value, weight, icon = '') => keys.push({ kind: 'key', text: label, key: kind, value, w: weight, icon });
     const tot = Object.values(m.next).reduce((a, b) => a + b, 0) + m.wordEnd || 1;
-    for (const s of kb.aiSugg) add(s, 'ai', s, 0.12, '✦');
+    // Older suggestions stay only while they still match what was typed.
+    const lc = kb.text.toLowerCase();
+    for (const s of kb.aiSugg) if (s.toLowerCase().startsWith(lc) && s.length > kb.text.length) add(s, 'ai', s, 0.12, '✦');
     for (const [w, p] of m.completions) add(w, 'word', w, (0.5 * p) / tot);
     add('space', 'char', ' ', m.prefix ? 0.08 + (0.5 * m.wordEnd) / tot : 0.01, '␣');
     for (const c of LETTERS) add(c, 'char', c, 0.004 + (0.6 * (m.next[c] || 0)) / tot);
