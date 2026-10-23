@@ -40,7 +40,7 @@ With the free AI model, on 299 randomly chosen clicks (Gemini Flash-Lite; blend 
 | + AI model told the user's goal | **6.5** | **48%** |
 | Row-column | 14.6 | 21% |
 
-On its own, the model reading the page doesn't beat page cues and history. Told the user's goal, it cuts steps by another 8% and gets the target within 5 steps nearly half the time. Changing the blend weights moves these numbers by less than 0.3 steps.
+On its own, the model reading the page doesn't beat page cues and history. Told the user's goal, it cuts steps by another 8% and gets the target within 5 steps nearly half the time. Across blend weights from 10% to 75% these numbers move by under 0.3 steps. Trusting the model at 90% makes things worse (7.0 steps with the goal), which is why the algorithm keeps the final say.
 
 Notes:
 - "Steps" are highlight positions the user waits through. At 1 second per step, steps ≈ seconds per click.
